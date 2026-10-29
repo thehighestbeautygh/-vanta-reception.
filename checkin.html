@@ -1,1 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vanta Events | Guest Check-in</title>
 
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: #f5f5f4;
+      color: #202020;
+      font-family: Arial, sans-serif;
+    }
+
+    header {
+      background: #171717;
+      color: white;
+      padding: 22px;
+    }
+
+    header small {
+      color: #c9c9c9;
+      letter-spacing: 2px;
+      font-size: 11px;
+    }
+
+    header h1 { margin: 10px 0 5px; font-size: 25px; }
+    header p { margin: 0; color: #d4d4d4; font-size: 14px; }
+
+    main {
+      max-width: 760px;
+      margin: 25px auto;
+      padding: 0 16px 40px;
+    }
+
+    section {
+      background: white;
+      border: 1px solid #e5e5e5;
+      border-radius: 14px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+
+    h2 { font-size: 18px; margin-top: 0; }
+
+    label {
+      display: block;
+      margin: 15px 0 7px;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    input {
+      width: 100%;
+      min-width: 0;
+      padding: 13px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      font-size: 16px;
+    }
+
+    button {
+      width: 100%;
+      padding: 14px;
+      margin-top: 12px;
+      border: 0;
+      border-radius: 8px;
+      background: #202020;
+      color: white;
+      font-size: 15px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: white;
+      color: #202020;
+      border: 1px solid #ccc;
+    }
+
+    button:disabled { opacity: .5; cursor: not-allowed; }
+
+    .muted { color: #666; font-size: 13px; line-height: 1.6; }
+
+    #status {
+      padding: 12px;
+      border-radius: 8px;
+      background: #f1f1f1;
+      margin: 15px 0;
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+
+    #guestCard {
+      border: 1px solid #dedede;
+      border-radius: 12px;
+      padding: 18px;
+      margin-top: 16px;
+      display: none;
+    }
+
+    #guestName { font-size: 24px; margin: 5px 0 8px; }
+
+    #reader { width: 100%; margin-top: 14px; }
+
+    .token-row {
+      border-top: 1px solid #eee;
+      padding: 16px 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .token-row p { overflow-wrap: anywhere; font-size: 12px; }
+    .qr { background: white; padding: 5px; }
+
+    .hidden { display: none !important; }
+
+    @media (max-width: 450px) {
+      section { padding: 16px; }
+      .token-row { grid-template-columns: minmax(0, 1fr); }
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <small>VANTA EVENTS</small>
+    <h1>Guest Reception</h1>
+    <p>Guest verification and arrival management</p>
+  </header>
+
+  <main>
+    <section id="loginSection">
+      <h2>Reception access</h2>
+      <p class="muted">
+        Enter the existing dashboard password to access guest check-in.
+      </p>
+
+      <form id="loginForm">
+        <label for="password">Dashboard password</label>
+        <input id="password" type="password" autocomplete="current-password" required>
+        <button type="submit">Unlock reception</button>
+      </form>
+    </section>
+
+    <div id="app" class="hidden">
+      <section>
+        <h2>Scan a guest's QR code</h2>
+        <p class="muted">
+          Allow camera access, then scan the guest's separate reception QR code.
+          The guest must be verified before arrival is recorded.
+        </p>
+
+        <button id="startScan">Open camera scanner</button>
+        <button id="stopScan" class="secondary" disabled>Stop scanner</button>
+        <div id="reader"></div>
+
+        <label for="manualToken">Or enter the check-in token</label>
+        <input id="manualToken" autocomplete="off" placeholder="Paste or enter the QR token">
+        <button id="lookupButton">Find guest</button>
+
+        <div id="status" role="status" aria-live="polite">
+          Reception is ready.
+        </div>
+
+        <div id="guestCard">
+          <p class="muted">GUEST IDENTIFIED</p>
+          <h2 id="guestName"></h2>
+          <p id="guestEvent" class="muted"></p>
+          <p id="guestArrival" class="muted"></p>
+          <button id="confirmButton">Confirm Arrival</button>
+          <button id="clearGuest" class="secondary">Clear guest</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Prepare check-in QR codes</h2>
+        <p class="muted">
+          This creates tokens for guests who do not already have one.
+          Each token is shown only once by the server. Save the generated QR
+          codes securely for the invitation PDFs. Do not share this page publicly.
+        </p>
+
+        <button id="prepareButton">Generate missing check-in tokens</button>
+        <div id="tokenResults"></div>
+      </section>
+
+      <button id="logoutButton" class="secondary">Lock reception</button>
+    </div>
+  </main>
+
+  <script>
+    const FUNCTION_URL =
+      "https://agvbwoqmlocvofcdxvjh.supabase.co/functions/v1/reception-checkin";
+
+    const PUBLISHABLE_KEY =
+      "sb_publishable_xd4fYI8jRuAxyewCYMcj6g_4I6hgSoC";
+
+    let dashboardPassword = "";
+    let scanner = null;
+    let scanning = false;
+    let currentGuest = null;
+    let requestBusy = false;
+
+    const $ = (id) => document.getElementById(id);
+
+    function showStatus(message) {
+      $("status").textContent = message;
+    }
+
+    async function callFunction(payload) {
+      const response = await fetch(FUNCTION_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": PUBLISHABLE_KEY
+        },
+        body: JSON.stringify({
+          ...payload,
+          dashboardPassword
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || `Request failed (${response.status}).`
+        );
+      }
+
+      return data;
+    }
+
+    $("loginForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      dashboardPassword = $("password").value;
+
+      try {
+        await callFunction({ action: "prepare_tokens" });
+
+        $("loginSection").classList.add("hidden");
+        $("app").classList.remove("hidden");
+        $("password").value = "";
+        showStatus("Access granted. Reception is ready.");
+      } catch (error) {
+        dashboardPassword = "";
+        alert(
+          "Could not verify reception access. Check the password and deployment settings. " +
+          error.message
+        );
+      }
+    });
+
+    async function lookupToken(token) {
+      token = String(token || "").trim();
+
+      if (!/^[a-f0-9]{64}$/i.test(token)) {
+        showStatus("That token does not look valid. Scan the guest's check-in QR again.");
+        return;
+      }
+
+      $("manualToken").value = token;
+      $("guestCard").style.display = "none";
+      currentGuest = null;
+      showStatus("Checking guest details…");
+
+      try {
+        const result = await callFunction({
+          action: "lookup",
+          checkinToken: token
+        });
+
+        currentGuest = {
+          token,
+          ...result.guest
+        };
+
+        $("guestName").textContent = result.guest.guest_name || "Guest";
+        $("guestEvent").textContent =
+          "Event: " + (result.guest.event_name || "Not specified");
+
+        const alreadyCheckedIn = result.guest.already_checked_in;
+
+        $("guestArrival").textContent = alreadyCheckedIn
+          ? "Status: Already checked in"
+          : "Status: Not yet checked in";
+
+        $("confirmButton").disabled = alreadyCheckedIn;
+        $("confirmButton").textContent = alreadyCheckedIn
+          ? "Already Checked In"
+          : "Confirm Arrival";
+
+        $("guestCard").style.display = "block";
+
+        showStatus(
+          alreadyCheckedIn
+            ? "This guest has already checked in. No changes were made."
+            : "Guest verified. Confirm their arrival only when they are present."
+        );
+      } catch (error) {
+        currentGuest = null;
+        $("guestCard").style.display = "none";
+        showStatus(error.message);
+      }
+    }
+
+    $("lookupButton").addEventListener("click", () => {
+      lookupToken($("manualToken").value);
+    });
+
+    $("manualToken").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        lookupToken($("manualToken").value);
+      }
+    });
+
+    $("confirmButton").addEventListener("click", async () => {
+      if (!currentGuest || requestBusy) return;
+
+      if (currentGuest.already_checked_in) {
+        showStatus("This guest has already checked in.");
+        return;
+      }
+
+      if (!confirm("Confirm arrival for " + currentGuest.guest_name + "?")) {
+        return;
+      }
+
+      requestBusy = true;
+      $("confirmButton").disabled = true;
+      showStatus("Recording arrival…");
+
+      try {
+        const result = await callFunction({
+          action: "confirm",
+          checkinToken: currentGuest.token
+        });
+
+        if (result.already_checked_in) {
+          currentGuest.already_checked_in = true;
+          $("guestArrival").textContent = "Status: Already checked in";
+          $("confirmButton").textContent = "Already Checked In";
+          showStatus(result.message || "This guest was already checked in.");
+        } else {
+          currentGuest.already_checked_in = true;
+          $("guestArrival").textContent =
+            "Status: Arrival confirmed at " +
+            new Date(result.guest.checked_in_at).toLocaleString();
+
+          $("confirmButton").textContent = "Arrival Confirmed";
+          showStatus("Arrival recorded successfully.");
+        }
+      } catch (error) {
+        showStatus(error.message);
+        $("confirmButton").disabled = false;
+      } finally {
+        requestBusy = false;
+      }
+    });
+
+    $("clearGuest").addEventListener("click", () => {
+      currentGuest = null;
+      $("guestCard").style.display = "none";
+      $("manualToken").value = "";
+      showStatus("Guest cleared. Ready for the next guest.");
+    });
+
+    $("startScan").addEventListener("click", async () => {
+      if (scanning) return;
+
+      if (typeof Html5Qrcode === "undefined") {
+        showStatus("The scanner library did not load. Refresh the page and try again.");
+        return;
+      }
+
+      scanner = new Html5Qrcode("reader");
+
+      try {
+        await scanner.start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 230, height: 230 } },
+          async (decodedText) => {
+            if (requestBusy) return;
+
+            const value = decodedText.trim();
+
+            // QR codes may contain either the token itself or a URL with a token.
+            let token = value;
+
+            try {
+              const url = new URL(value);
+              token =
+                url.searchParams.get("checkin") ||
+                url.searchParams.get("token") ||
+                value;
+            } catch (_) {}
+
+            if (/^[a-f0-9]{64}$/i.test(token)) {
+              requestBusy = true;
+              await stopScanner();
+              try {
+                await lookupToken(token);
+              } finally {
+                requestBusy = false;
+              }
+            } else {
+              showStatus("This QR code is not a valid Vanta check-in token.");
+            }
+          },
+          () => {}
+        );
+
+        scanning = true;
+        $("startScan").disabled = true;
+        $("stopScan").disabled = false;
+        showStatus("Camera active. Point it at a guest's reception QR code.");
+      } catch (error) {
+        scanner = null;
+        showStatus("Could not open the camera. Check browser camera permissions and try again.");
+      }
+    });
+
+    async function stopScanner() {
+      if (scanner && scanning) {
+        try {
+          await scanner.stop();
+          await scanner.clear();
+        } catch (_) {}
+      }
+
+      scanner = null;
+      scanning = false;
+      $("startScan").disabled = false;
+      $("stopScan").disabled = true;
+    }
+
+    $("stopScan").addEventListener("click", stopScanner);
+
+    $("prepareButton").addEventListener("click", async () => {
+      if (!confirm(
+        "Generate check-in tokens for guests who do not have one yet? Save the resulting QR codes securely; newly generated tokens will not be shown again."
+      )) return;
+
+      $("prepareButton").disabled = true;
+      $("tokenResults").textContent = "Preparing tokens…";
+
+      try {
+        const result = await callFunction({ action: "prepare_tokens" });
+        const container = $("tokenResults");
+        container.replaceChildren();
+
+        if (!result.tokens || result.tokens.length === 0) {
+          container.textContent =
+            "No new tokens were created. Guests may already have tokens, or the guest list may be empty.";
+          return;
+        }
+
+        const warning = document.createElement("p");
+        warning.className = "muted";
+        warning.textContent =
+          "Save each QR code now. The raw tokens are not stored in this browser after you leave.";
+        container.appendChild(warning);
+
+        result.tokens.forEach((guest) => {
+          const row = document.createElement("div");
+          row.className = "token-row";
+
+          const details = document.createElement("div");
+          const name = document.createElement("strong");
+          name.textContent = guest.guest_name || "Guest";
+
+          const event = document.createElement("p");
+          event.textContent = guest.event_name || "Event not specified";
+
+          const save = document.createElement("button");
+          save.className = "secondary";
+          save.textContent = "Download QR code";
+
+          const qrBox = document.createElement("div");
+          qrBox.className = "qr";
+
+          details.append(name, event, save);
+          row.append(details, qrBox);
+          container.appendChild(row);
+
+          new QRCode(qrBox, {
+            text: guest.checkin_token,
+            width: 150,
+            height: 150,
+            correctLevel: QRCode.CorrectLevel.M
+          });
+
+          save.addEventListener("click", () => {
+            const canvas = qrBox.querySelector("canvas");
+            const image = qrBox.querySelector("img");
+            const dataUrl = canvas
+              ? canvas.toDataURL("image/png")
+              : image?.src;
+
+            if (!dataUrl) {
+              alert("The QR code is not ready yet. Try again.");
+              return;
+            }
+
+            const link = document.createElement("a");
+            link.href = dataUrl;
+            link.download =
+              (guest.guest_name || "guest").replace(/[^a-z0-9_-]/gi, "_") +
+              "-checkin.png";
+            link.click();
+          });
+        });
+
+        showStatus("Created " + result.tokens.length + " new check-in QR code(s).");
+      } catch (error) {
+        $("tokenResults").textContent = error.message;
+      } finally {
+        $("prepareButton").disabled = false;
+      }
+    });
+
+    $("logoutButton").addEventListener("click", async () => {
+      await stopScanner();
+      dashboardPassword = "";
+      currentGuest = null;
+      $("app").classList.add("hidden");
+      $("loginSection").classList.remove("hidden");
+      $("tokenResults").replaceChildren();
+      $("guestCard").style.display = "none";
+      showStatus("Reception locked.");
+    });
+  </script>
+</body>
+</html>
